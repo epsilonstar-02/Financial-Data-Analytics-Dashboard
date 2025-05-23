@@ -435,13 +435,274 @@ Please provide a detailed, data-driven analysis that directly answers the user's
 """
     return context
 
-def get_ai_response(model, df, summary, question):
-    """Get response from Gemini AI with specific data analysis"""
+def parse_question_with_gemini(model, df, question):
+    """Use Gemini to parse a natural language question into structured JSON format"""
+    if not model:
+        return None
+    
     try:
-        specific_analysis = analyze_data_for_question(df, question)
-        context = create_context_prompt(df, summary, question, specific_analysis)
-        response = model.generate_content(context)
+        # Create a prompt that instructs Gemini to parse the question into structured JSON
+        prompt = f"""
+        You are a specialized AI financial analyst for Tesla stock data. 
+        Parse the following question about Tesla stock data and convert it to a structured JSON format.
+        
+        QUESTION: {question}
+        
+        OUTPUT FORMAT: Return a valid JSON object with the following fields:
+        - action: (string) The query action type ('aggregate', 'filter', 'describe', 'compare', 'count')
+        - columns: (array) List of column names relevant to the query (e.g. ["volume"], ["close"])
+        - filters: (object) Dictionary with filter conditions like time ranges or direction filters
+          e.g. {{
+            "timestamp": {{"start": "2024-03-01", "end": "2024-03-31"}},
+            "direction": "LONG"
+          }}
+        - metric: (string) Statistical operation like 'mean', 'sum', 'max', 'min', 'count' (if applicable)
+        - group_by: (string, optional) Field to group by (e.g. "direction" or "quarter")
+        
+        AVAILABLE COLUMNS IN DATASET:
+        - timestamp: Date in format YYYY-MM-DD
+        - open: Opening price
+        - high: Highest price
+        - low: Lowest price
+        - close: Closing price
+        - volume: Trading volume
+        - direction: Trading signal (LONG = bullish, SHORT = bearish, None = neutral)
+        - support_low: Lower support level
+        - support_high: Higher support level
+        - res_low: Lower resistance level
+        - res_high: Higher resistance level
+        
+        EXAMPLE 1:
+        Question: "How many LONG days were there in 2024?"
+        Response: {{"action": "count", "columns": [], "filters": {{"timestamp": {{"start": "2024-01-01", "end": "2024-12-31"}}, "direction": "LONG"}}, "metric": "count", "group_by": null}}
+        
+        EXAMPLE 2:
+        Question: "Average close price in Q3 2023?"
+        Response: {{"action": "aggregate", "columns": ["close"], "filters": {{"timestamp": {{"start": "2023-07-01", "end": "2023-09-30"}}}}, "metric": "mean", "group_by": null}}
+        
+        IMPORTANT: 
+        - Use ISO date format (YYYY-MM-DD) for all dates
+        - Use proper Python data types (strings, numbers, booleans)
+        - Ensure the JSON is valid and properly formatted
+        - If a field is not applicable, use null
+        - Do not add any explanations or text outside the JSON object
+        
+        RESPONSE (JSON only):
+        """
+        
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
+        # Clean up the response to ensure it's valid JSON
+        # Remove markdown code blocks if present
+        result = result.replace('```json', '').replace('```', '').strip()
+        
+        # Parse the JSON
+        import json
+        parsed_json = json.loads(result)
+        return parsed_json
+        
+    except Exception as e:
+        st.error(f"Error parsing question: {e}")
+        return None
+
+def execute_structured_query(df, query_json):
+    """Execute a structured query based on parsed JSON"""
+    if df.empty or not query_json:
+        return "No data available or invalid query structure."
+    
+    try:
+        # Make a copy of the dataframe to avoid modifying the original
+        filtered_df = df.copy()
+        
+        # Apply filters
+        if 'filters' in query_json and query_json['filters']:
+            filters = query_json['filters']
+            
+            # Apply timestamp filters
+            if 'timestamp' in filters:
+                timestamp_filter = filters['timestamp']
+                if 'start' in timestamp_filter and timestamp_filter['start']:
+                    start_date = pd.to_datetime(timestamp_filter['start'])
+                    filtered_df = filtered_df[filtered_df['timestamp'] >= start_date]
+                if 'end' in timestamp_filter and timestamp_filter['end']:
+                    end_date = pd.to_datetime(timestamp_filter['end'])
+                    filtered_df = filtered_df[filtered_df['timestamp'] <= end_date]
+            
+            # Apply direction filter
+            if 'direction' in filters and filters['direction']:
+                direction = filters['direction']
+                filtered_df = filtered_df[filtered_df['direction'] == direction]
+        
+        # If no data matches filters
+        if filtered_df.empty:
+            return "No data found for the specified filters."
+        
+        # Get the action and metric
+        action = query_json.get('action', '')
+        metric = query_json.get('metric', '')
+        columns = query_json.get('columns', [])
+        group_by = query_json.get('group_by')
+        
+        # Execute the appropriate action
+        result = {}
+        
+        if action == 'count':
+            result['count'] = len(filtered_df)
+            if columns:
+                for col in columns:
+                    if col in filtered_df.columns:
+                        result[f'{col}_count'] = filtered_df[col].count()
+        
+        elif action == 'aggregate':
+            if not columns:
+                columns = ['close']  # Default to close price if no columns specified
+            
+            for col in columns:
+                if col in filtered_df.columns:
+                    if metric == 'mean':
+                        result[f'avg_{col}'] = filtered_df[col].mean()
+                    elif metric == 'sum':
+                        result[f'sum_{col}'] = filtered_df[col].sum()
+                    elif metric == 'max':
+                        result[f'max_{col}'] = filtered_df[col].max()
+                    elif metric == 'min':
+                        result[f'min_{col}'] = filtered_df[col].min()
+                    else:  # Default to mean if metric not specified
+                        result[f'avg_{col}'] = filtered_df[col].mean()
+        
+        elif action == 'compare':
+            if group_by and group_by in filtered_df.columns:
+                # Special case for temporal grouping
+                if group_by == 'quarter' and 'timestamp' in filtered_df.columns:
+                    filtered_df['quarter'] = filtered_df['timestamp'].dt.quarter
+                    group_by = 'quarter'
+                elif group_by == 'month' and 'timestamp' in filtered_df.columns:
+                    filtered_df['month'] = filtered_df['timestamp'].dt.month
+                    group_by = 'month'
+                elif group_by == 'year' and 'timestamp' in filtered_df.columns:
+                    filtered_df['year'] = filtered_df['timestamp'].dt.year
+                    group_by = 'year'
+                
+                if not columns:
+                    columns = ['close']  # Default
+                
+                for col in columns:
+                    if col in filtered_df.columns:
+                        grouped = filtered_df.groupby(group_by)[col]
+                        if metric == 'mean':
+                            result[f'{col}_by_{group_by}'] = grouped.mean().to_dict()
+                        elif metric == 'sum':
+                            result[f'{col}_by_{group_by}'] = grouped.sum().to_dict()
+                        elif metric == 'max':
+                            result[f'{col}_by_{group_by}'] = grouped.max().to_dict()
+                        elif metric == 'min':
+                            result[f'{col}_by_{group_by}'] = grouped.min().to_dict()
+                        elif metric == 'count':
+                            result[f'{col}_count_by_{group_by}'] = grouped.count().to_dict()
+                        else:  # Default to mean
+                            result[f'{col}_by_{group_by}'] = grouped.mean().to_dict()
+            
+            # Special case for direction comparison
+            elif group_by == 'direction':
+                direction_counts = filtered_df['direction'].value_counts().to_dict()
+                result['direction_counts'] = direction_counts
+                
+                if columns:
+                    for col in columns:
+                        if col in filtered_df.columns:
+                            direction_stats = filtered_df.groupby('direction')[col].agg(['mean', 'max', 'min']).to_dict()
+                            result[f'{col}_by_direction'] = direction_stats
+        
+        elif action == 'describe':
+            if not columns:
+                # Default to price columns
+                columns = ['open', 'high', 'low', 'close']
+            
+            for col in columns:
+                if col in filtered_df.columns:
+                    col_stats = filtered_df[col].describe().to_dict()
+                    result[f'{col}_stats'] = col_stats
+        
+        # Return metadata along with results
+        result['metadata'] = {
+            'filtered_rows': len(filtered_df),
+            'total_rows': len(df),
+            'date_range': {
+                'start': filtered_df['timestamp'].min().strftime('%Y-%m-%d') if not filtered_df.empty else None,
+                'end': filtered_df['timestamp'].max().strftime('%Y-%m-%d') if not filtered_df.empty else None
+            }
+        }
+        
+        # Convert any NumPy or Pandas specific types to Python native types for JSON serialization
+        import json
+        result_json = json.loads(json.dumps(result, default=str))
+        
+        return result_json
+        
+    except Exception as e:
+        st.error(f"Error executing query: {e}")
+        return {"error": str(e)}
+
+def format_query_results(model, question, query_results):
+    """Format query results into a natural language response using Gemini"""
+    if not model or not query_results:
+        return "I couldn't analyze that question. Please try a different question."
+    
+    try:
+        # Create a prompt for Gemini to summarize the results
+        prompt = f"""
+        You are a specialized financial analyst for Tesla stock data. 
+        Summarize the following query results into a natural language response that directly answers the user's question.
+        
+        USER QUESTION: {question}
+        
+        QUERY RESULTS: {query_results}
+        
+        FORMAT YOUR RESPONSE:
+        - Begin with a direct answer to the question
+        - Include specific numbers from the results (format large numbers with commas, prices with $ symbol)
+        - Format percentages properly (e.g., 24.5%)
+        - Round decimal numbers to 2 places for readability
+        - Include a brief interpretation of what the numbers mean for TSLA stock
+        - Keep your response concise and to the point
+        - Write in a professional but conversational tone
+        - Do not reference the JSON structure itself
+        - IMPORTANT: Ensure proper spacing between words and numbers (e.g., "$176.85" should be followed by a space)
+        - CHECK your response for run-together words like "reachedahighof" or "beforeclosingat" and fix them
+        - When listing multiple metrics, use commas and proper spacing
+        
+        YOUR ANSWER:
+        """
+        
+        response = model.generate_content(prompt)
         return response.text
+    
+    except Exception as e:
+        st.error(f"Error formatting results: {e}")
+        return f"Error generating response: {str(e)}"
+
+def get_ai_response(model, df, summary, question):
+    """Process a natural language question using the new structured approach"""
+    try:
+        # Step 1: Parse the question into structured JSON
+        parsed_query = parse_question_with_gemini(model, df, question)
+        
+        if not parsed_query:
+            # Fallback to the old approach if parsing fails
+            specific_analysis = analyze_data_for_question(df, question)
+            context = create_context_prompt(df, summary, question, specific_analysis)
+            response = model.generate_content(context)
+            return response.text
+        
+        # Step 2: Execute the structured query
+        query_results = execute_structured_query(df, parsed_query)
+        
+        # Step 3: Format the results as natural language
+        formatted_response = format_query_results(model, question, query_results)
+        
+        return formatted_response
+    
     except Exception as e:
         st.error(f"AI Error: {e}")
         return f"❌ Error generating response: {str(e)}"
@@ -559,14 +820,14 @@ def main():
         else:
             st.subheader("💡 Try These Questions:")
             template_questions = [
-                "How many days in 2023 was TSLA bullish (LONG direction)?",
-                "What was the highest and lowest price of TSLA in the dataset?",
-                "Analyze the correlation between support/resistance levels and price movements",
-                "What patterns do you see in the trading signals over time?",
-                "Compare the performance in different quarters",
-                "What were the strongest support and resistance levels based on the provided lists?",
-                "How often did price break through resistance levels?", # This might be hard for current analyze_data_for_question
-                "Analyze the frequency of LONG vs SHORT signals"
+                "How many LONG days were there in 2024?",
+                "Average close price in Q3 2023?",
+                "What's the max high between Jan and March 2024?",
+                "Compare volume for LONG vs SHORT days",
+                "Show total bullish candles in 2023",
+                "What was the highest price in the dataset?",
+                "Count how many days had a price above $200",
+                "Calculate average close price by month in 2023"
             ]
             
             cols = st.columns(2)
@@ -586,11 +847,23 @@ def main():
             )
             st.session_state.question_input = user_question # Sync text_area back to session state
 
+            debug_mode = st.sidebar.checkbox("Show query debugging", value=False)
+
             if st.button("🚀 Get AI Analysis", type="primary"):
                 current_question = st.session_state.get('question_input', '').strip()
                 if current_question:
                     with st.spinner("🧠 AI is analyzing the data..."):
+                        # First try to parse with the new structured approach
+                        parsed_query = parse_question_with_gemini(model, df, current_question)
+                        
+                        # Debug option to show the parsed JSON
+                        if debug_mode and parsed_query:
+                            st.subheader("🔍 Query Interpretation")
+                            st.json(parsed_query)
+                        
+                        # Get the final response
                         response = get_ai_response(model, df, summary, current_question)
+                        
                         st.markdown("### 📊 AI Analysis Result:")
                         st.markdown(response)
                         
