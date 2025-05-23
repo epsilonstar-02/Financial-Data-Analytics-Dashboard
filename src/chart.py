@@ -35,7 +35,7 @@ def configure_gemini():
     
     try:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel('gemini-1.5-flash')
+        return genai.GenerativeModel('gemini-2.0-flash')
     except Exception as e:
         st.error(f"❌ Error configuring Gemini API: {str(e)}")
         return None
