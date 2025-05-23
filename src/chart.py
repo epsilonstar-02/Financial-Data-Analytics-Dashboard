@@ -645,38 +645,60 @@ def execute_structured_query(df, query_json):
         return {"error": str(e)}
 
 def format_query_results(model, question, query_results):
-    """Format query results into a natural language response using Gemini"""
+    """Format query results into a natural language response using Gemini with improved formatting"""
     if not model or not query_results:
         return "I couldn't analyze that question. Please try a different question."
     
     try:
-        # Create a prompt for Gemini to summarize the results
+        # Create a prompt for Gemini to summarize the results with clear formatting instructions
         prompt = f"""
         You are a specialized financial analyst for Tesla stock data. 
-        Summarize the following query results into a natural language response that directly answers the user's question.
+        Analyze the following query results and provide a well-formatted response that answers the user's question.
         
         USER QUESTION: {question}
         
         QUERY RESULTS: {query_results}
         
-        FORMAT YOUR RESPONSE:
-        - Begin with a direct answer to the question
-        - Include specific numbers from the results (format large numbers with commas, prices with $ symbol)
+        FORMAT YOUR RESPONSE IN THREE CLEAR SECTIONS:
+        
+        1. DIRECT ANSWER: Start with a concise, direct answer to the user's question including specific numbers and metrics.
+        
+        2. DETAILED ANALYSIS: Provide additional context and details about the findings, using short, clear sentences.
+        
+        3. INTERPRETATION: End with a brief interpretation of what the numbers mean for TSLA stock.
+        
+        CRITICAL FORMATTING RULES:
+        - Format large numbers with commas and prices with $ symbol
         - Format percentages properly (e.g., 24.5%)
         - Round decimal numbers to 2 places for readability
-        - Include a brief interpretation of what the numbers mean for TSLA stock
-        - Keep your response concise and to the point
-        - Write in a professional but conversational tone
-        - Do not reference the JSON structure itself
-        - IMPORTANT: Ensure proper spacing between words and numbers (e.g., "$176.85" should be followed by a space)
-        - CHECK your response for run-together words like "reachedahighof" or "beforeclosingat" and fix them
-        - When listing multiple metrics, use commas and proper spacing
+        - Use proper spacing between all words, numbers, and punctuation
+        - NEVER run words together - each word must be separated by spaces
+        - Use short sentences to avoid run-on text
+        - After each sentence, add a space before starting the next one
         
-        YOUR ANSWER:
+        EXAMPLE OF PROPER FORMATTING:
+        "In March 2024, Tesla's average closing price was $176.34. The stock ranged from a low of $162.51 to a high of $202.57.
+        
+        The average opening price was $176.85, with an average high of $179.70 and an average low of $173.73. The stock showed moderate volatility during this period.
+        
+        These figures suggest Tesla experienced a relatively stable trading month with slight upward momentum, maintaining investor confidence despite market fluctuations."
         """
         
+        # Generate content with the improved prompt
         response = model.generate_content(prompt)
+        
+        # Return the formatted text
         return response.text
+        
+    except Exception as e:
+        st.error(f"Error formatting results: {e}")
+        # Fallback to regular response if structured output fails
+        try:
+            simple_prompt = f"Summarize these query results to answer: {question}\n\nResults: {query_results}"
+            response = model.generate_content(simple_prompt)
+            return response.text
+        except:
+            return f"Error generating response: Unable to format results properly."
     
     except Exception as e:
         st.error(f"Error formatting results: {e}")
@@ -709,8 +731,128 @@ def get_ai_response(model, df, summary, question):
 
 # --- Streamlit App ---
 def main():
-    st.title("📈 TSLA Trading Analytics Dashboard")
-    st.markdown("### Advanced Candlestick Analysis with AI-Powered Insights")
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem !important;
+        font-weight: 700 !important;
+        color: #1E88E5 !important;
+        margin-bottom: 0.3rem !important;
+    }
+    .sub-header {
+        font-size: 1.5rem !important;
+        font-weight: 400 !important;
+        color: #78909C !important;
+        margin-bottom: 2rem !important;
+        font-style: italic;
+    }
+    .stat-card {
+        background-color: #1E1E1E;
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    .section-header {
+        font-size: 1.8rem !important;
+        font-weight: 600 !important;
+        color: #26A69A !important;
+        border-bottom: 1px solid #26A69A;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1.5rem !important;
+    }
+    .ai-response {
+        background-color: #f0f8ff;
+        border-left: 5px solid #1E88E5;
+        padding: 20px;
+        border-radius: 0 10px 10px 0;
+        margin: 15px 0;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .ai-response p {
+        font-size: 1.05rem;
+        line-height: 1.6;
+        margin-bottom: 12px;
+    }
+    .ai-response-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+        border-bottom: 1px solid #e1e4e8;
+        padding-bottom: 10px;
+    }
+    .ai-response-header h3 {
+        margin: 0;
+        font-size: 1.4rem;
+        color: #1E88E5;
+    }
+    .ai-response-header img {
+        width: 24px;
+        height: 24px;
+        margin-right: 10px;
+    }
+    .question-box {
+        border: 1px solid #78909C;
+        border-radius: 10px;
+        padding: 1px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        transition: box-shadow 0.3s ease;
+    }
+    .question-box:hover {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .template-card {
+        background: linear-gradient(135deg, #f8f9fa, #f1f3f5);
+        border-left: 4px solid #1E88E5;
+        padding: 12px;
+        margin: 8px 0;
+        border-radius: 6px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        cursor: pointer;
+        font-size: 0.95rem;
+    }
+    .template-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .ai-analysis-intro {
+        background: linear-gradient(135deg, rgba(38, 166, 154, 0.05), rgba(30, 136, 229, 0.05));
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 25px;
+        border: 1px solid rgba(30, 136, 229, 0.1);
+    }
+    .analysis-button {
+        background: linear-gradient(90deg, #1E88E5, #26A69A);
+        color: white;
+        font-weight: bold;
+        padding: 12px 20px;
+        border-radius: 30px;
+        border: none;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+        margin-top: 10px;
+    }
+    .analysis-button:hover {
+        box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        transform: translateY(-2px);
+    }
+    .template-btn {
+        text-align: left !important;
+        margin: 3px 0 !important;
+    }
+    .chart-legend {
+        background-color: rgba(19, 23, 34, 0.7);
+        border-radius: 5px;
+        padding: 10px;
+        margin-top: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Dashboard Header
+    st.markdown('<p class="main-header">📈 TSLA Trading Analytics Dashboard</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Advanced Candlestick Analysis with AI-Powered Insights</p>', unsafe_allow_html=True)
     
     st.sidebar.header("📁 Configuration")
     
@@ -737,26 +879,56 @@ def main():
             st.error("Failed to load or process data. Please check the file and its contents (especially Support/Resistance columns).")
             return
         summary = create_data_summary(df)
+        
+        # Success message with animation
+        st.success("✅ Data loaded successfully! " + str(summary['total_records']) + " records processed.")
     
     model = configure_gemini()
     
     chart_tab, ai_tab, data_tab = st.tabs(["📊 Interactive Chart", "🤖 AI Analysis", "📋 Data Overview"])
     
     with chart_tab:
-        st.header("TSLA Candlestick Chart with Trading Signals")
+        st.markdown('<p class="section-header">TSLA Candlestick Chart with Trading Signals</p>', unsafe_allow_html=True)
         
         if df.empty:
             st.warning("No data to display in chart.")
         else:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Latest Price", f"${summary['price_stats']['latest_close']:.2f}")
-            with col2:
-                st.metric("Price Range", f"${summary['price_stats']['lowest_price']:.2f} - ${summary['price_stats']['highest_price']:.2f}")
-            with col3:
-                st.metric("Total Records", summary['total_records'])
-            with col4:
-                st.metric("Date Range", f"{summary['date_range']['start']} to {summary['date_range']['end']}")
+            # Enhanced metric cards with CSS styling
+            st.markdown('<div style="display: flex; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px;">', unsafe_allow_html=True)
+            
+            # Latest Price Card
+            st.markdown(f'''
+            <div style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #1E1E1E, #2A2A2A); margin: 5px; padding: 15px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); border-left: 5px solid #26A69A;">
+                <p style="margin: 0; color: #CCC; font-size: 0.9rem;">Latest Price</p>
+                <p style="margin: 0; color: #26A69A; font-size: 1.8rem; font-weight: bold;">${summary['price_stats']['latest_close']:.2f}</p>
+            </div>
+            ''', unsafe_allow_html=True)
+            
+            # Price Range Card
+            st.markdown(f'''
+            <div style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #1E1E1E, #2A2A2A); margin: 5px; padding: 15px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); border-left: 5px solid #64B5F6;">
+                <p style="margin: 0; color: #CCC; font-size: 0.9rem;">Price Range</p>
+                <p style="margin: 0; color: #64B5F6; font-size: 1.8rem; font-weight: bold;">${summary['price_stats']['lowest_price']:.2f} - ${summary['price_stats']['highest_price']:.2f}</p>
+            </div>
+            ''', unsafe_allow_html=True)
+            
+            # Total Records Card
+            st.markdown(f'''
+            <div style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #1E1E1E, #2A2A2A); margin: 5px; padding: 15px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); border-left: 5px solid #FFD54F;">
+                <p style="margin: 0; color: #CCC; font-size: 0.9rem;">Total Records</p>
+                <p style="margin: 0; color: #FFD54F; font-size: 1.8rem; font-weight: bold;">{summary['total_records']}</p>
+            </div>
+            ''', unsafe_allow_html=True)
+            
+            # Date Range Card
+            st.markdown(f'''
+            <div style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #1E1E1E, #2A2A2A); margin: 5px; padding: 15px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); border-left: 5px solid #BA68C8;">
+                <p style="margin: 0; color: #CCC; font-size: 0.9rem;">Date Range</p>
+                <p style="margin: 0; color: #BA68C8; font-size: 1.3rem; font-weight: bold;">{summary['date_range']['start']} to {summary['date_range']['end']}</p>
+            </div>
+            ''', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
             
             chart_opts = create_chart_config()
             chart_bg_color = chart_opts['layout']['background']['color'] # Get background color for mask
@@ -802,23 +974,47 @@ def main():
             renderLightweightCharts(charts_data, key='tsla_enhanced_floating_bands')
             
             st.markdown("""
-            **Chart Legend:**
-            - 🟢 **Green Arrow (↑)**: LONG signal (below candle)
-            - 🔴 **Red Arrow (↓)**: SHORT signal (above candle)
-            - 🟡 **Yellow Circle**: Neutral/No signal
-            - 🟢 **Green Band**: Support zone
-            - 🔴 **Red Band**: Resistance zone
-            """)
+            <div class="chart-legend">
+                <h4 style="margin-top: 0; color: #FFF; font-size: 1.2rem;">📊 Chart Legend</h4>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between;">
+                    <div style="flex: 1; min-width: 180px; margin: 5px;">
+                        <p style="margin: 5px 0;">🟢 <span style="color: #26A69A; font-weight: bold;">Green Arrow (↑)</span>: LONG signal</p>
+                        <p style="margin: 5px 0;">🔴 <span style="color: #EF5350; font-weight: bold;">Red Arrow (↓)</span>: SHORT signal</p>
+                    </div>
+                    <div style="flex: 1; min-width: 180px; margin: 5px;">
+                        <p style="margin: 5px 0;">🟡 <span style="color: #FFD700; font-weight: bold;">Yellow Circle</span>: Neutral signal</p>
+                        <p style="margin: 5px 0;">🟢 <span style="color: #26A69A; font-weight: bold;">Green Band</span>: Support zone</p>
+                        <p style="margin: 5px 0;">🔴 <span style="color: #EF5350; font-weight: bold;">Red Band</span>: Resistance zone</p>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
     
     with ai_tab:
-        st.header("🤖 AI-Powered Data Analysis")
+        st.markdown('<p class="section-header">🤖 AI-Powered Data Analysis</p>', unsafe_allow_html=True)
         
         if not model:
             st.warning("⚠️ Please configure your Gemini API key to use the AI agent")
         elif df.empty:
             st.warning("⚠️ No data loaded for AI analysis.")
         else:
-            st.subheader("💡 Try These Questions:")
+            # Introduction with enhanced animation
+            st.markdown("""
+            <div class="ai-analysis-intro">  
+                <h3 style="margin-top: 0; color: #1E88E5; display: flex; align-items: center;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1E88E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 10px;">  
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M12 16v-4"></path>
+                        <path d="M12 8h.01"></path>
+                    </svg>
+                    Ask Anything About Your TSLA Data
+                </h3>
+                <p style="margin-bottom: 0; font-size: 1.05rem;">This AI-powered assistant can analyze your Tesla stock data and answer specific questions about trends, metrics, and patterns.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown('<h3 style="color: #26A69A; font-size: 1.3rem; margin-bottom: 15px; display: flex; align-items: center;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg> Example Questions:</h3>', unsafe_allow_html=True)
+            
             template_questions = [
                 "How many LONG days were there in 2024?",
                 "Average close price in Q3 2023?",
@@ -830,42 +1026,120 @@ def main():
                 "Calculate average close price by month in 2023"
             ]
             
+            # Improved template cards
             cols = st.columns(2)
             for i, question in enumerate(template_questions):
                 col = cols[i % 2]
-                if col.button(f"📝 {question}", key=f"template_{i}"):
+                
+                # Use a regular Streamlit button but with custom styling
+                button_key = f"template_{i}"
+                if col.button(f"{question}", key=button_key, use_container_width=True):
                     st.session_state.selected_question = question
-                    st.session_state.question_input = question # Also update text_area
+                    st.session_state.question_input = question
                     st.rerun()
+                
+                # Apply custom styling to the button using CSS and button key
+                st.markdown(f"""
+                <style>
+                [data-testid="stButton"] > button[kind="secondary"][data-testid="{button_key}"] {{
+                    background: linear-gradient(135deg, #f8f9fa, #f1f3f5);
+                    border-left: 4px solid #1E88E5;
+                    padding: 12px;
+                    margin: 8px 0;
+                    border-radius: 6px;
+                    transition: transform 0.2s ease, box-shadow 0.2s ease;
+                    font-size: 0.95rem;
+                    text-align: left;
+                    font-weight: normal;
+                }}
+                [data-testid="stButton"] > button[kind="secondary"][data-testid="{button_key}"]:hover {{
+                    transform: translateY(-2px);
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                }}
+                </style>
+                """, unsafe_allow_html=True)
 
+            # Enhanced question input with icon and better styling
+            st.markdown('<div class="question-box">', unsafe_allow_html=True)
+            st.markdown('''
+            <div style="display: flex; align-items: center; margin-bottom: 8px; padding: 0 10px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1E88E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;">  
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <label style="font-weight: 500; color: #1E88E5;">Ask your question about TSLA data:</label>
+            </div>
+            ''', unsafe_allow_html=True)
+            
             user_question = st.text_area(
-                "🔍 Ask your question about TSLA data:",
-                value=st.session_state.get('question_input', ''), # Use question_input for persistence
+                "Ask your question:",  # Providing a proper label
+                value=st.session_state.get('question_input', ''),
                 height=100,
                 placeholder="e.g., How many bullish days were there in 2023?",
-                key="question_input_area" # Different key from session_state.question_input if needed, but can be same
+                key="question_input_area",
+                help="Ask questions about price trends, trading signals, or statistical analysis of your TSLA data",
+                label_visibility="collapsed"  # Hide the label since we're using a custom one
             )
-            st.session_state.question_input = user_question # Sync text_area back to session state
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.session_state.question_input = user_question
 
-            debug_mode = st.sidebar.checkbox("Show query debugging", value=False)
-
-            if st.button("🚀 Get AI Analysis", type="primary"):
+            # Custom styled analysis button
+            st.markdown('''
+            <style>
+            div[data-testid="stButton"] button {
+                background: linear-gradient(90deg, #1E88E5, #26A69A);
+                color: white;
+                font-weight: bold;
+                padding: 0.5rem 1rem;
+                border-radius: 30px;
+                border: none;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+            }
+            div[data-testid="stButton"] button:hover {
+                box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+                transform: translateY(-2px);
+            }
+            </style>
+            ''', unsafe_allow_html=True)
+            
+            # Analysis button with animation
+            if st.button("🚀 Get AI Analysis", type="primary", use_container_width=True):
                 current_question = st.session_state.get('question_input', '').strip()
                 if current_question:
                     with st.spinner("🧠 AI is analyzing the data..."):
                         # First try to parse with the new structured approach
                         parsed_query = parse_question_with_gemini(model, df, current_question)
                         
-                        # Debug option to show the parsed JSON
-                        if debug_mode and parsed_query:
-                            st.subheader("🔍 Query Interpretation")
-                            st.json(parsed_query)
-                        
                         # Get the final response
                         response = get_ai_response(model, df, summary, current_question)
                         
-                        st.markdown("### 📊 AI Analysis Result:")
-                        st.markdown(response)
+                        st.markdown('<div class="ai-response">', unsafe_allow_html=True)
+                        st.markdown('<h3 style="color: #1E88E5; margin-top: 0;">📊 AI Analysis Result:</h3>', unsafe_allow_html=True)
+                        
+                        # Enhanced AI response styling with custom header and formatted paragraphs
+                        st.markdown('''
+                        <div class="ai-response-header">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1E88E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                            </svg>
+                            <h3>AI Analysis Result</h3>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                        
+                        # Format the response with enhanced styling for paragraphs
+                        paragraphs = response.split('\n\n')
+                        for i, paragraph in enumerate(paragraphs):
+                            if paragraph.strip():
+                                # Apply different styling to the first paragraph (direct answer)
+                                if i == 0:
+                                    st.markdown(f"<p style='font-weight: 500; font-size: 1.1rem; color: #333;'>{paragraph}</p>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"<p>{paragraph}</p>", unsafe_allow_html=True)
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
                         
                         if 'chat_history' not in st.session_state:
                             st.session_state.chat_history = []
@@ -894,32 +1168,47 @@ def main():
                     st.rerun()
     
     with data_tab:
-        st.header("📋 Data Overview & Statistics")
+        st.markdown('<p class="section-header">📋 TSLA Data Overview</p>', unsafe_allow_html=True)
+        
         if df.empty:
             st.warning("No data to display.")
         else:
+            # Data summary
+            st.subheader("Dataset Summary")
             col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📈 Price Statistics")
-                st.json(summary['price_stats'])
-                st.subheader("📊 Direction Distribution")
-                if summary['direction_counts']:
-                    st.bar_chart(pd.Series(summary['direction_counts']))
-                else:
-                    st.write("No direction data available.")
-            with col2:
-                st.subheader("🎯 Support/Resistance Stats (from lists)")
-                st.json(summary['support_resistance_stats'])
-                st.subheader("📅 Date Range")
-                st.json(summary['date_range'])
             
-            st.subheader("🔍 Data Preview (First 10 Rows with calculated band values)")
+            with col1:
+                st.markdown(f"**Total Records:** {summary['total_records']}")
+                st.markdown(f"**Date Range:** {summary['date_range']['start']} to {summary['date_range']['end']}")
+                st.markdown(f"**Avg. Close Price:** ${summary['price_stats']['avg_close']:.2f}")
+            
+            with col2:
+                st.markdown(f"**Highest Price:** ${summary['price_stats']['highest_price']:.2f}")
+                st.markdown(f"**Lowest Price:** ${summary['price_stats']['lowest_price']:.2f}")
+                st.markdown(f"**Latest Close:** ${summary['price_stats']['latest_close']:.2f}")
+            
+            # Direction counts
+            st.subheader("Trading Signal Distribution")
+            direction_counts = pd.Series(summary.get('direction_counts', {}))
+            
+            if not direction_counts.empty:
+                # Convert to DataFrame for better display
+                direction_df = pd.DataFrame({
+                    'Signal': direction_counts.index,
+                    'Count': direction_counts.values,
+                    'Percentage': (direction_counts.values / direction_counts.sum() * 100).round(1)
+                })
+                
+                st.dataframe(direction_df.style.format({'Percentage': '{:.1f}%'}), use_container_width=True)
+            
+            # Add a sample data view at the bottom of the data tab
+            st.subheader("TSLA Data Sample")
             st.dataframe(
-                df[['timestamp', 'open', 'high', 'low', 'close', 'direction', 
-                    'Support', 'Resistance', 'support_low', 'support_high', 'res_low', 'res_high']].head(10),
+                df[['timestamp', 'open', 'high', 'low', 'close', 'direction']].head(10),
                 use_container_width=True
             )
             
+            # Add download button for the data
             csv_data = df.to_csv(index=False)
             st.download_button(
                 label="⬇️ Download Processed Data",
@@ -927,6 +1216,14 @@ def main():
                 file_name="tsla_processed_data.csv",
                 mime="text/csv"
             )
+    
+    # Add clear history button at the bottom of the AI tab
+    with ai_tab:
+        if not df.empty and 'chat_history' in st.session_state and len(st.session_state.chat_history) > 0:
+            st.markdown("---")
+            if st.button("🗑️ Clear Chat History", key="clear_history"):
+                st.session_state.chat_history = []
+                st.rerun()
 
 if __name__ == "__main__":
     main()
