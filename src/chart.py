@@ -83,11 +83,18 @@ def load_data(csv_file) -> pd.DataFrame:
         df['support_list'] = df['Support'].apply(safe_literal_eval)
         df['resistance_list'] = df['Resistance'].apply(safe_literal_eval)
         
-        # Compute support/resistance bounds
-        df['support_low'] = df['support_list'].apply(lambda x: min(x) if x else None)
-        df['support_high'] = df['support_list'].apply(lambda x: max(x) if x else None)
-        df['res_low'] = df['resistance_list'].apply(lambda x: min(x) if x else None)
-        df['res_high'] = df['resistance_list'].apply(lambda x: max(x) if x else None)
+        # Compute support/resistance bounds using enhanced calculation
+        df = improved_support_resistance_calculation(df)
+        
+        # Debug output for data quality
+        if not df.empty:
+            debug_info = debug_support_resistance(df)
+            if debug_info['overlapping_bands'] > 0:
+                st.warning(f"⚠️ Found {debug_info['overlapping_bands']} rows with overlapping support/resistance bands")
+            
+            # Log data quality metrics
+            st.sidebar.metric("Data Quality", f"{debug_info['valid_support']/len(df)*100:.1f}% valid support bands")
+            st.sidebar.metric("", f"{debug_info['valid_resistance']/len(df)*100:.1f}% valid resistance bands")
         
         # Convert timestamp to UNIX seconds
         df['time'] = (df['timestamp'].astype('int64') // 10**9).astype(int)
@@ -186,32 +193,193 @@ def create_markers(df):
     return markers
 
 def create_band_series(df, low_col, high_col, color, name):
-    """Create support/resistance band series"""
+    """Create support/resistance band series with improved validation"""
     valid_data = []
+    
     for _, row in df.iterrows():
         low_val = row[low_col]
         high_val = row[high_col]
-        if pd.notna(low_val) and pd.notna(high_val) and low_val <= high_val:
+        
+        # Enhanced validation
+        if (pd.notna(low_val) and pd.notna(high_val) and 
+            low_val > 0 and high_val > 0 and  # Ensure positive values
+            low_val <= high_val and  # Ensure logical order
+            abs(high_val - low_val) > 0.01):  # Minimum meaningful range
+            
             valid_data.append({
                 'time': row['time'],
-                'value': low_val,
-                'highValue': high_val
+                'value': float(low_val),  # Ensure float type
+                'highValue': float(high_val)
             })
     
+    if not valid_data:
+        # Return empty series if no valid data
+        return {
+            'type': 'Area',
+            'data': [],
+            'options': {
+                'topColor': f'{color}30',
+                'bottomColor': f'{color}50',
+                'lineWidth': 1,
+                'lineStyle': 0,
+                'priceScaleId': '',
+                'title': name,
+                'visible': False  # Hide if no data
+            }
+        }
+    
+    # Return series with valid data
     return {
         'type': 'Area',
         'data': valid_data,
         'options': {
-            'topColor': f'{color}30',
-            'bottomColor': f'{color}50',
-            'lineWidth': 2,
-            'lineStyle': 0,
+            'topColor': f'{color}20',  # More transparent
+            'bottomColor': f'{color}40',
+            'lineWidth': 1,
+            'lineStyle': 2,  # Dashed line
             'priceScaleId': '',
-            'title': name
+            'title': name,
+            'crosshairMarkerVisible': False,
+            'lastValueVisible': False
         }
     }
 
+def calculate_default_bounds(df, window=20):
+    """Calculate default support/resistance based on recent price action"""
+    # Use recent lows for support, highs for resistance
+    df = df.copy()
+    df['default_support'] = df['low'].rolling(window=window, min_periods=1).min()
+    df['default_resistance'] = df['high'].rolling(window=window, min_periods=1).max()
+    return df
+
+def fill_missing_values(df):
+    """Fill missing support/resistance values using forward fill and default values"""
+    # Ensure we have the default bounds calculated
+    if 'default_support' not in df.columns:
+        df = calculate_default_bounds(df)
+    
+    # Forward fill support/resistance values
+    support_cols = ['support_low', 'support_high']
+    resistance_cols = ['res_low', 'res_high']
+    
+    # Forward fill with previous valid values
+    for cols in [support_cols, resistance_cols]:
+        df[cols] = df[cols].fillna(method='ffill')
+    
+    # Fill any remaining NAs with default values
+    df['support_low'] = df['support_low'].fillna(df['default_support'])
+    df['support_high'] = df['support_high'].fillna(df['default_support'])
+    df['res_low'] = df['res_low'].fillna(df['default_resistance'])
+    df['res_high'] = df['res_high'].fillna(df['default_resistance'])
+    
+    return df
+
 # --- AI Agent Functions ---
+def improved_support_resistance_calculation(df, window=20):
+    """
+    Enhanced support/resistance calculation with robust missing data handling.
+    
+    Implements a three-tier strategy:
+    1. Forward fill missing values from previous valid data
+    2. Use interpolation for gaps when possible
+    3. Fall back to price-based default bands when needed
+    
+    Args:
+        df: DataFrame with price data and support/resistance lists
+        window: Lookback window for calculating default bounds (default: 20)
+    
+    Returns:
+        DataFrame with support/resistance bounds and filled missing values
+    """
+    def safe_bounds(price_list):
+        """Safely calculate min/max bounds from a price list with validation"""
+        if not price_list or len(price_list) == 0:
+            return None, None
+        
+        # Filter out invalid prices
+        valid_prices = [p for p in price_list if isinstance(p, (int, float)) and p > 0]
+        
+        if not valid_prices:
+            return None, None
+            
+        return min(valid_prices), max(valid_prices)
+    
+    # Calculate initial bounds
+    bounds = df[['support_list', 'resistance_list']].apply(
+        lambda x: pd.Series({
+            'support_low': safe_bounds(x['support_list'])[0],
+            'support_high': safe_bounds(x['support_list'])[1],
+            'res_low': safe_bounds(x['resistance_list'])[0],
+            'res_high': safe_bounds(x['resistance_list'])[1]
+        }), 
+        axis=1
+    )
+    
+    # Add bounds to dataframe
+    df = pd.concat([df, bounds], axis=1)
+    
+    # Calculate default bounds based on price action
+    df = calculate_default_bounds(df, window=window)
+    
+    # Fill missing values using our strategy
+    df = fill_missing_values(df)
+    
+    # Ensure no NaN values remain
+    for col in ['support_low', 'support_high', 'res_low', 'res_high']:
+        if df[col].isna().any():
+            # If we still have NaNs, fall back to default values
+            if 'support' in col:
+                df[col] = df[col].fillna(df['default_support'])
+            else:
+                df[col] = df[col].fillna(df['default_resistance'])
+    
+    # Clean up temporary columns
+    df = df.drop(columns=['default_support', 'default_resistance'], errors='ignore')
+    
+    return df
+
+def debug_support_resistance(df):
+    """Debug support/resistance data quality"""
+    print("=== Support/Resistance Debug Info ===")
+    
+    # Check data quality
+    total_rows = len(df)
+    support_valid = df[['support_low', 'support_high']].notna().all(axis=1).sum()
+    resistance_valid = df[['res_low', 'res_high']].notna().all(axis=1).sum()
+    
+    print(f"Total rows: {total_rows}")
+    print(f"Valid support bands: {support_valid} ({support_valid/total_rows*100:.1f}%)")
+    print(f"Valid resistance bands: {resistance_valid} ({resistance_valid/total_rows*100:.1f}%)")
+    
+    # Sample some support/resistance data
+    print("\n=== Sample Support/Resistance Data ===")
+    sample_data = df[['timestamp', 'close', 'support_list', 'resistance_list', 
+                      'support_low', 'support_high', 'res_low', 'res_high']].head(10)
+    
+    for _, row in sample_data.iterrows():
+        print(f"\nDate: {row['timestamp'].strftime('%Y-%m-%d')}")
+        print(f"Close: ${row['close']:.2f}")
+        print(f"Support List: {row['support_list']}")
+        print(f"Support Range: ${row['support_low']:.2f} - ${row['support_high']:.2f}" 
+              if pd.notna(row['support_low']) else "No support")
+        print(f"Resistance List: {row['resistance_list']}")
+        print(f"Resistance Range: ${row['res_low']:.2f} - ${row['res_high']:.2f}" 
+              if pd.notna(row['res_low']) else "No resistance")
+    
+    # Check for overlapping bands
+    overlap_check = df[(df['support_high'] > df['res_low']) & 
+                       df['support_low'].notna() & df['res_high'].notna()]
+    
+    if len(overlap_check) > 0:
+        print(f"\n⚠️  WARNING: {len(overlap_check)} rows have overlapping support/resistance bands")
+    
+    return {
+        'total_rows': total_rows,
+        'valid_support': support_valid,
+        'valid_resistance': resistance_valid,
+        'overlapping_bands': len(overlap_check)
+    }
+
 def analyze_data_for_question(df, question):
     """Analyze data based on the specific question and return relevant subset"""
     question_lower = question.lower()
