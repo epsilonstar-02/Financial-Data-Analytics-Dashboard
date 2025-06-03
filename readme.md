@@ -168,4 +168,4 @@ The application will attempt to find these columns using the common names. If yo
 
 ## License
 
-This project can be considered under the MIT License (or specify your preferred license).
+This project can be considered under the MIT License
